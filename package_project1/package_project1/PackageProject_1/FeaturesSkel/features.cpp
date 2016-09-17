@@ -74,7 +74,8 @@ bool matchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<FeatureMat
 		ssdMatchFeatures(f1, f2, matches, totalScore);
 		return true;
 	case 2:
-		ratioMatchFeatures(f1, f2, matches, totalScore);
+		std::cout << "Here" << std::endl;
+		//ratioMatchFeatures(f1, f2, matches, totalScore);
 		return true;
 	default:
 		return false;
@@ -242,6 +243,9 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 	//Create image to store Harris values
 	CFloatImage harrisImage(image.Shape().width, image.Shape().height, 1);
 
+	//Create image to store the orientation of each pixel
+	CFloatImage orientationImage(image.Shape().width, image.Shape().height, 1);
+
 	//Create image to store local maximum harris values as 1, other pixels 0
 	CByteImage harrisMaxImage(image.Shape().width, image.Shape().height, 1);
 
@@ -249,21 +253,35 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 	computeHarrisValues(grayImage, harrisImage, thread_pool, max_per_partition);
 
 	double sum = 0.0;
+	double stand_dev = 0.0;
 	std::for_each(max_per_partition.begin(), max_per_partition.end(), [&sum](double & ele)
 	{
 		sum += ele;
 	});
 
 	double avg = sum / (double)max_per_partition.size();
-	const double threshold = avg > 0.1 ? avg : 0.0;
+	std::for_each(max_per_partition.begin(), max_per_partition.end(), [&avg, &stand_dev](double & ele)
+	{
+		stand_dev += pow(ele - avg, 2.0);
+	});
+	
+	stand_dev = stand_dev / ((double)max_per_partition.size() - 1.0);
+	stand_dev = sqrt(stand_dev);
+
+	double threshold_avg = avg > 0.1 ? avg : 0.0;
+	const double threshold = threshold_avg - stand_dev*2;
+
+	std::cout << avg << std::endl;
+	std::cout << stand_dev << std::endl;
+	std::cout << threshold << std::endl;
 
 	// Threshold the harris image and compute local maxima.  You'll need to implement this function.
 	computeLocalMaxima(harrisImage, harrisMaxImage, thread_pool, threshold);
 
 	// Prints out the harris image for debugging purposes
-	//CByteImage tmp(harrisImage.Shape());
-	//convertToByteImage(harrisImage, tmp);
-	//WriteFile(tmp, "harris.tga");
+	CByteImage tmp(harrisImage.Shape());
+	convertToByteImage(harrisImage, tmp);
+	WriteFile(tmp, "harris.tga");
 
 
 	// TO DO--------------------------------------------------------------------
@@ -299,12 +317,11 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 						features.push_back(f);
 						id++;
 					}
-					
+
 				}
 			}
 		}));
 	});
-
 
 	std::for_each(thread_pool.begin(), thread_pool.end(), [](WorkerThread & wt)
 	{
@@ -397,7 +414,7 @@ void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, std::v
 			{
 				wt.set_indicies(wt.get_start_x() + offset, wt.get_start_y() + offset, wt.get_end_x() - offset, wt.get_end_y() - offset);
 			}
-		
+
 			for (int y = wt.get_start_y(); y < wt.get_end_y(); y++)
 			{
 				for (int x = wt.get_start_x(); x < wt.get_end_x(); x++)
@@ -413,10 +430,10 @@ void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, std::v
 						{
 							//gy*w+gx
 							int gaussian_index = (gy + offset)*GAUSSIAN_SIZE + (gx + offset);
-							
+
 							int adjusted_x_idx = x + gx;
 							int adjusted_y_idx = y + gy;
-							
+
 							weighted_derivative_xy.Pixel(x, y, 0) += derivative_xy.Pixel(adjusted_x_idx, adjusted_y_idx, 0)*gaussian7x7[gaussian_index];
 							weighted_derivative_xx.Pixel(x, y, 0) += derivative_xx.Pixel(adjusted_x_idx, adjusted_y_idx, 0)*gaussian7x7[gaussian_index];
 							weighted_derivative_yy.Pixel(x, y, 0) += derivative_yy.Pixel(adjusted_x_idx, adjusted_y_idx, 0)*gaussian7x7[gaussian_index];
@@ -426,7 +443,6 @@ void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, std::v
 
 				}
 			}
-
 
 			double a;
 			double b;
@@ -486,8 +502,9 @@ void computeLocalMaxima(CFloatImage &srcImage, CByteImage &destImage, std::vecto
 			for (int x = wt.get_start_x(); x < wt.get_end_x(); x++)
 			{
 				double cur_pixel = srcImage.Pixel(x, y, 0);
-				if (cur_pixel > threshold)
+				if (cur_pixel >= threshold)
 				{
+
 					bool max = true;
 					for (int search_y = y - 1; search_y <= y + 1 && max; search_y++)
 					{
@@ -505,7 +522,6 @@ void computeLocalMaxima(CFloatImage &srcImage, CByteImage &destImage, std::vecto
 					if (max)
 					{
 						destImage.Pixel(x, y, 0) = 1.0;
-						x += 2;
 					}
 				}
 				else
@@ -551,6 +567,7 @@ void ssdMatchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<Feature
 		matches[i].id2 = idBest;
 		matches[i].score = dBest;
 		totalScore += matches[i].score;
+
 	}
 }
 
@@ -561,7 +578,57 @@ void ssdMatchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<Feature
 // the second image.  (See class notes for more information, and the sshMatchFeatures function above as a reference)
 void ratioMatchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<FeatureMatch> &matches, double &totalScore)
 {
+	int inner = f1.size();
+	int outer = f2.size();
+
+	totalScore = 0;
 	
+	double dist;
+	double best_dist;
+	double second_best_dist;
+
+	int best_idx;
+	int second_best_idx;
+
+	for (int i = 0; i < inner; i++)
+	{
+		best_dist = 1e100;
+		second_best_dist = 1e100;
+		best_idx = 0;
+		second_best_idx = 0;
+
+		for (int j = 0; j < outer; j++)
+		{
+			dist = distanceSSD(f1[i].data, f2[j].data);
+
+			if (dist < second_best_dist)
+			{
+				if (dist < best_dist)
+				{
+					second_best_dist = best_dist;
+					best_dist = dist;
+
+					second_best_idx = best_idx;
+					best_idx = f2[j].id;
+				}
+				else
+				{
+					second_best_dist = dist;
+					second_best_idx = f2[j].id;
+				}
+			}
+
+
+		}
+
+		FeatureMatch best_feature;
+		best_feature.id1 = f1[i].id;
+		best_feature.id2 = best_idx;
+		best_feature.score = best_dist / second_best_dist;
+		totalScore += matches[i].score;
+
+		matches.push_back(best_feature);
+	}
 
 }
 
