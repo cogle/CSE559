@@ -40,7 +40,7 @@ struct ROCPoint
 
 
 // Compute harris values of an image.
-void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, std::vector<WorkerThread> & wtp, std::vector<double> & max_per_partition);
+void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, CFloatImage & orientationImage, std::vector<WorkerThread> & wtp, std::vector<double> & max_per_partition);
 
 //  Compute local maximum of Harris values in an image.
 void computeLocalMaxima(CFloatImage &srcImage, CByteImage &destImage, std::vector<WorkerThread> & wtp, const double & threshold);
@@ -95,5 +95,6 @@ void divideUpWork(std::vector<WorkerThread> & workers, int width, int height, in
 
 void filterImage(CFloatImage &rsltImg, CFloatImage &origImg, int imgWidth, int imgHeight, const double* kernel, int knlWidth, int knlHeight, double scale, double offset);
 
+void computeMOPSDescriptors(CFloatImage & image, FeatureSet & features);
 
 #endif

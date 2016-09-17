@@ -74,8 +74,8 @@ bool matchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<FeatureMat
 		ssdMatchFeatures(f1, f2, matches, totalScore);
 		return true;
 	case 2:
-		std::cout << "Here" << std::endl;
-		//ratioMatchFeatures(f1, f2, matches, totalScore);
+		std::cout << "Matching using Ratio Match" << std::endl;
+		ratioMatchFeatures(f1, f2, matches, totalScore);
 		return true;
 	default:
 		return false;
@@ -250,7 +250,7 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 	CByteImage harrisMaxImage(image.Shape().width, image.Shape().height, 1);
 
 	//Single Threaded Compute Harris function
-	computeHarrisValues(grayImage, harrisImage, thread_pool, max_per_partition);
+	computeHarrisValues(grayImage, harrisImage, orientationImage, thread_pool, max_per_partition);
 
 	double sum = 0.0;
 	double stand_dev = 0.0;
@@ -264,12 +264,12 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 	{
 		stand_dev += pow(ele - avg, 2.0);
 	});
-	
+
 	stand_dev = stand_dev / ((double)max_per_partition.size() - 1.0);
 	stand_dev = sqrt(stand_dev);
 
 	double threshold_avg = avg > 0.1 ? avg : 0.0;
-	const double threshold = threshold_avg - stand_dev*2;
+	const double threshold = threshold_avg - stand_dev * 2;
 
 	std::cout << avg << std::endl;
 	std::cout << stand_dev << std::endl;
@@ -291,7 +291,7 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 
 	int id;
 	SpinlockMutex spin_lock;
-	std::for_each(thread_pool.begin(), thread_pool.end(), [&id, &harrisMaxImage, &features, &spin_lock, &harrisImage](WorkerThread & wt)
+	std::for_each(thread_pool.begin(), thread_pool.end(), [&id, &harrisMaxImage, &features, &spin_lock, &harrisImage, &orientationImage](WorkerThread & wt)
 	{
 		wt.assign_work(std::thread([&]()
 		{
@@ -305,6 +305,7 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 					f.type = 2;
 					f.x = x;
 					f.y = y;
+					f.angleRadians = orientationImage.Pixel(x, y, 0);
 
 					f.data.resize(1);
 					f.data[0] = harrisImage.Pixel(x, y, 0);
@@ -339,7 +340,7 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 //Loop through the image to compute the harris corner values as described in class
 // srcImage:  grayscale of original image
 // harrisImage:  populate the harris values per pixel in this image
-void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, std::vector<WorkerThread> & wtp, std::vector<double> & max_per_partition)
+void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, CFloatImage & orientationImage, std::vector<WorkerThread> & wtp, std::vector<double> & max_per_partition)
 {
 	const int w = srcImage.Shape().width;
 	const int h = srcImage.Shape().height;
@@ -450,6 +451,12 @@ void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, std::v
 
 			double det;
 			double trace;
+			double eigen_value;
+
+			double angle;
+			double root_lhs;
+			double root_rhs;
+			double root_value;
 
 			double harris_value;
 
@@ -468,7 +475,15 @@ void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, std::v
 
 					harris_value = (det / trace);
 
+					root_lhs = 4.0*b*b;
+					root_rhs = pow(a - d, 2.0);
+					root_value = sqrt(root_lhs + root_rhs);
+					eigen_value = .5*((trace)-root_value);
+					angle = atan2(b, eigen_value - d);
+
 					harrisImage.Pixel(i, j, 0) = harris_value;
+					orientationImage.Pixel(i, j, 0) = angle;
+
 					if (harris_value > max){ max = harris_value; }
 				}
 			}
@@ -534,6 +549,11 @@ void computeLocalMaxima(CFloatImage &srcImage, CByteImage &destImage, std::vecto
 
 }
 
+void computeMOPSDescriptors(CFloatImage & image, FeatureSet & features)
+{
+	
+}
+
 // Perform simple feature matching.  This just uses the SSD
 // distance between two feature vectors, and matches a feature in the
 // first image with the closest feature in the second image.  It can
@@ -578,11 +598,13 @@ void ssdMatchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<Feature
 // the second image.  (See class notes for more information, and the sshMatchFeatures function above as a reference)
 void ratioMatchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<FeatureMatch> &matches, double &totalScore)
 {
-	int inner = f1.size();
-	int outer = f2.size();
+	int m = f1.size();
+	int n = f2.size();
+
+	matches.resize(m);
 
 	totalScore = 0;
-	
+
 	double dist;
 	double best_dist;
 	double second_best_dist;
@@ -590,14 +612,14 @@ void ratioMatchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<Featu
 	int best_idx;
 	int second_best_idx;
 
-	for (int i = 0; i < inner; i++)
+	for (int i = 0; i < m; i++)
 	{
 		best_dist = 1e100;
 		second_best_dist = 1e100;
 		best_idx = 0;
 		second_best_idx = 0;
 
-		for (int j = 0; j < outer; j++)
+		for (int j = 0; j < n; j++)
 		{
 			dist = distanceSSD(f1[i].data, f2[j].data);
 
@@ -625,9 +647,9 @@ void ratioMatchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<Featu
 		best_feature.id1 = f1[i].id;
 		best_feature.id2 = best_idx;
 		best_feature.score = best_dist / second_best_dist;
-		totalScore += matches[i].score;
+		matches[i] = best_feature;
 
-		matches.push_back(best_feature);
+		totalScore += matches[i].score;
 	}
 
 }
