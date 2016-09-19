@@ -19,6 +19,7 @@ bool computeFeatures(CFloatImage &image, FeatureSet &features, int featureType) 
 	// feature computation routines and call them here.
 	switch (featureType) {
 	case 1:
+		std::cout << "Dummy Compute" << std::endl;
 		dummyComputeFeatures(image, features);
 		break;
 	case 2:
@@ -71,6 +72,7 @@ bool matchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<FeatureMat
 
 	switch (matchType) {
 	case 1:
+		std::cout << "Matching using SSD Match" << std::endl;
 		ssdMatchFeatures(f1, f2, matches, totalScore);
 		return true;
 	case 2:
@@ -221,12 +223,12 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 
 	std::chrono::time_point<std::chrono::system_clock> start, end;
 	start = std::chrono::system_clock::now();
-	std::cout << "Entered the Compute Harris Function" << std::endl;
+	std::cout << "Entered the Compute Harris Function\n";
 
 	/*
 	Set up a thread pool to be used throughout this functions call.
 	*/
-	const int max_threads = WorkerThread::max_threads() < 4 ? 4 : WorkerThread::max_threads();
+	const int max_threads = WorkerThread::max_threads() < 6 ? 6 : WorkerThread::max_threads();
 	//const int max_threads = 1;
 	const int w = image.Shape().width;
 	const int h = image.Shape().height;
@@ -268,30 +270,39 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 	stand_dev = stand_dev / ((double)max_per_partition.size() - 1.0);
 	stand_dev = sqrt(stand_dev);
 
-	double threshold_avg = avg > 0.1 ? avg : 0.0;
-	const double threshold = threshold_avg - stand_dev * 2;
+	double threshold_avg = avg > 0.01 ? avg : 0.0;
 
-	std::cout << avg << std::endl;
-	std::cout << stand_dev << std::endl;
-	std::cout << threshold << std::endl;
+	double threshold;
+	if (2 * stand_dev < threshold_avg)
+	{
+		threshold = threshold_avg - stand_dev * 2;
+	}
+	else
+	{
+		threshold = threshold_avg - stand_dev;
+	}
+
+	std::cout << "Average: " << avg << "\n";
+	std::cout << "Standard Deviation: " << stand_dev << "\n";
+	std::cout << "Threshold: " << threshold << "\n";
 
 	// Threshold the harris image and compute local maxima.  You'll need to implement this function.
 	computeLocalMaxima(harrisImage, harrisMaxImage, thread_pool, threshold);
 
 	// Prints out the harris image for debugging purposes
-	CByteImage tmp(harrisImage.Shape());
-	convertToByteImage(harrisImage, tmp);
-	WriteFile(tmp, "harris.tga");
-
+	//CByteImage tmp(harrisImage.Shape());
+	//convertToByteImage(harrisImage, tmp);
+	//WriteFile(tmp, "harris_yosemite.tga");
 
 	// TO DO--------------------------------------------------------------------
 	//Loop through feature points in harrisMaxImage and create feature descriptor 
 	//for each point above a threshold
 
 
-	int id;
+	int id = 0;
+
 	SpinlockMutex spin_lock;
-	std::for_each(thread_pool.begin(), thread_pool.end(), [&id, &harrisMaxImage, &features, &spin_lock, &harrisImage, &orientationImage](WorkerThread & wt)
+	std::for_each(thread_pool.begin(), thread_pool.end(), [&](WorkerThread & wt)
 	{
 		wt.assign_work(std::thread([&]()
 		{
@@ -323,12 +334,24 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 			}
 		}));
 	});
-
 	std::for_each(thread_pool.begin(), thread_pool.end(), [](WorkerThread & wt)
 	{
 		wt.join();
 	});
+	
 
+	//Threading this method proved to be more work than it was worth. 
+	//The overhead from storing shared pointers to elements in the Feature array caused the 
+	//run time to spike, beyond the single threaded version. 
+
+	/*SIMPLE DESCRIPTOR*/
+	std::cout << "Simple Descriptor\n";
+	computeSimpleDescriptors(grayImage, features);
+
+	/*MOPS DESCRIPTOR*/
+	//std::cout << "MOPS Descriptor\n";
+	//resetIndices(thread_pool, h, w);
+	//computeMOPSDescriptors(grayImage, features, thread_pool);
 
 	end = std::chrono::system_clock::now();
 	std::chrono::duration<double> elapsed_seconds = end - start;
@@ -462,6 +485,7 @@ void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, CFloat
 
 			double max = -1.0;
 
+
 			for (int j = wt.get_start_y(); j < wt.get_end_y(); j++)
 			{
 				for (int i = wt.get_start_x(); i < wt.get_end_x(); i++)
@@ -490,6 +514,23 @@ void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, CFloat
 
 
 			max_per_partition[wt.get_worker_id()] = max;
+			
+
+			int cur_offest = SIMPLE_DESCRIPTOR_OFFEST;
+			//int cur_offest = MOPS_DESCRIPTOR_OFFEST;
+
+			if (wt.get_worker_id() == 0)
+			{
+				wt.set_indicies(wt.get_start_x() + cur_offest, wt.get_start_y() + cur_offest, wt.get_end_x() - cur_offest, wt.get_end_y());
+			}
+			else if (wt.get_worker_id() == wtp.size() - 1)
+			{
+				wt.set_indicies(wt.get_start_x() + cur_offest, wt.get_start_y(), wt.get_end_x() - cur_offest, wt.get_end_y() - cur_offest);
+			}
+			else
+			{
+				wt.set_indicies(wt.get_start_x() + cur_offest, wt.get_start_y(), wt.get_end_x() - cur_offest, wt.get_end_y());
+			}
 
 		}));
 	});
@@ -549,9 +590,162 @@ void computeLocalMaxima(CFloatImage &srcImage, CByteImage &destImage, std::vecto
 
 }
 
-void computeMOPSDescriptors(CFloatImage & image, FeatureSet & features)
+/*
+Basic algoirthm for this procedure comes from the following slides:
+http://www.cs.princeton.edu/courses/archive/fall08/cos429/features
+*/
+void computeMOPSDescriptors(CFloatImage & image, FeatureSet & features, std::vector<WorkerThread> & wtp)
 {
-	
+
+	const int window_size = 8;
+
+	// Blur Image
+	CFloatImage blur_image{ image.Shape().width, image.Shape().height, 1 };
+
+	//5x5 Gaussian Blur kernel(Copied from the one in the header)
+	int blur_window_size = 5;
+	CFloatImage blurKernel{ blur_window_size, blur_window_size, 1 };
+	blurKernel.origin[0] = blur_window_size / 2;
+	blurKernel.origin[1] = blur_window_size / 2;
+
+
+	for (int j = 0; j < blur_window_size; j++){
+		for (int i = 0; i < blur_window_size; i++){
+			blurKernel.Pixel(i, j, 0) = gaussian5x5[blur_window_size * j + i];
+		}
+	}
+
+	std::for_each(wtp.begin(), wtp.end(), [&](WorkerThread & wt){
+		wt.assign_work(std::thread([&](){
+			ConvolveThreaded(image, blur_image, blurKernel, wt.get_start_y(), wt.get_end_y());
+		}));
+	});
+
+	std::for_each(wtp.begin(), wtp.end(), [&](WorkerThread & wt){
+		wt.join();
+	});
+
+	//Convolve(image, blur_image, blurKernel);
+
+	CFloatImage feature_image{ window_size, window_size, 1 };
+
+	for (Feature & f : features)
+	{
+
+		CTransform3x3 transformed_matrix;
+
+		CTransform3x3 origin;
+		origin = origin.Translation(float(-window_size / 2), float(-window_size / 2));
+
+		CTransform3x3 rotate;
+		rotate = rotate.Rotation(f.angleRadians * 180.0 / PI);
+
+		CTransform3x3 trans;
+		trans = trans.Translation(f.x, f.y);
+
+		CTransform3x3 scale;
+		scale[0][0] = 40 / window_size;
+		scale[1][1] = 40 / window_size;
+
+		transformed_matrix = trans * rotate * scale * origin;
+
+		WarpGlobal(blur_image, feature_image, transformed_matrix, eWarpInterpLinear);
+
+		f.data.resize(window_size * window_size);
+
+		double mean = 0.0;
+		for (int j = 0; j < window_size; j++)
+		{
+			for (int i = 0; i < window_size; i++)
+			{
+				mean += feature_image.Pixel(i, j, 0);
+			}
+		}
+		mean = mean / (window_size * window_size);
+
+		double variance = 0.0;
+		for (int j = 0; j < window_size; j++)
+		{
+			for (int i = 0; i < window_size; i++)
+			{
+				variance += pow((feature_image.Pixel(i, j, 0) - mean), 2);
+			}
+		}
+
+		double standard_dev = sqrt(variance / ((window_size * window_size) - 1));
+
+		// Fill in the feature descriptor data for a MOPS descriptor
+		for (int j = 0; j < window_size; j++)
+		{
+			for (int i = 0; i < window_size; i++)
+			{
+				f.data[j * window_size + i] = (feature_image.Pixel(i, j, 0) - mean) / standard_dev;
+			}
+		}
+	}
+
+}
+
+void computeSimpleDescriptors(CFloatImage &image, FeatureSet &features)
+{
+	const int window_size = 5;
+	const int offset = window_size / 2;
+	for (Feature & f : features)
+	{
+
+		int x = f.x;
+		int y = f.y;
+
+		f.data.resize(window_size * window_size);
+
+
+		double mean = 0.0;
+		double variance = 0.0;
+		double standard_dev = 0.0;
+
+
+		for (int gy = -offset; gy <= offset; gy++)
+		{
+			for (int gx = -offset; gx <= offset; gx++)
+			{
+				int adjusted_x_idx = x + gx;
+				int adjusted_y_idx = y + gy;
+				
+				mean += image.Pixel(adjusted_x_idx, adjusted_y_idx, 0);
+				
+			}
+		}
+
+		mean = mean / 25;
+
+		for (int gy = -offset; gy <= offset; gy++)
+		{
+			for (int gx = -offset; gx <= offset; gx++)
+			{
+				int adjusted_x_idx = x + gx;
+				int adjusted_y_idx = y + gy;
+
+				variance += pow(image.Pixel(adjusted_x_idx, adjusted_y_idx, 0) - mean, 0);
+
+			}
+		}
+
+		standard_dev = sqrt(variance / 24);
+		for (int gy = -offset; gy <= offset; gy++)
+		{
+			int data_idx = 0;
+			for (int gx = -offset; gx <= offset; gx++)
+			{
+				int adjusted_x_idx = x + gx;
+				int adjusted_y_idx = y + gy;
+
+				f.data[data_idx] = (image.Pixel(x, y, 0) - mean) / standard_dev;
+				data_idx++;
+			}
+		}
+
+
+	}
 }
 
 // Perform simple feature matching.  This just uses the SSD
@@ -598,6 +792,7 @@ void ssdMatchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<Feature
 // the second image.  (See class notes for more information, and the sshMatchFeatures function above as a reference)
 void ratioMatchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<FeatureMatch> &matches, double &totalScore)
 {
+
 	int m = f1.size();
 	int n = f2.size();
 
@@ -622,7 +817,6 @@ void ratioMatchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<Featu
 		for (int j = 0; j < n; j++)
 		{
 			dist = distanceSSD(f1[i].data, f2[j].data);
-
 			if (dist < second_best_dist)
 			{
 				if (dist < best_dist)
@@ -639,7 +833,6 @@ void ratioMatchFeatures(const FeatureSet &f1, const FeatureSet &f2, vector<Featu
 					second_best_idx = f2[j].id;
 				}
 			}
-
 
 		}
 
@@ -783,6 +976,21 @@ void divideUpWork(std::vector<WorkerThread> & workers, int width, int height, in
 
 	workers.push_back(WorkerThread{ 0, start_index, width, height, num_threads - 1 });
 
+}
+
+void resetIndices(std::vector<WorkerThread> & wtp, int height, int width)
+{
+	int block_size = height / wtp.size();
+	int start_index = 0;
+	int end_index = 0;
+
+	for (int i = 0; i < wtp.size() - 1; i++)
+	{
+		end_index += block_size;
+		wtp[i].set_indicies(0, start_index, width, end_index);
+		start_index = end_index;
+	}
+	wtp[wtp.size() - 1].set_indicies(0, start_index, width, height);
 }
 
 void filterImage(CFloatImage &rsltImg, CFloatImage &origImg, int imgWidth, int imgHeight, const double* kernel, int knlWidth, int knlHeight, double scale, double offset)

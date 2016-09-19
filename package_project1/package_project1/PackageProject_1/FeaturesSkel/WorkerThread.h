@@ -1,7 +1,9 @@
 #pragma once
 
-#include <iostream>
 #include <thread>
+#include <memory>
+#include <iostream>
+
 
 class WorkerThread
 {

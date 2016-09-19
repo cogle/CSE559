@@ -1,5 +1,7 @@
 #include "WorkerThread.h"
 
+#define PI 3.14159265358979323846
+
 WorkerThread::WorkerThread(int s_x, int s_y, int e_x, int e_y, int id) : _start_x(s_x), _start_y(s_y), _end_x(e_x), _end_y(e_y), _worker_id(id)
 {
 
@@ -68,3 +70,4 @@ void WorkerThread::set_indicies(int new_start_x, int new_start_y, int new_end_x,
 	_end_x = new_end_x;
 	_end_y = new_end_y;
 }
+

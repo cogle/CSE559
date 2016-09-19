@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <iostream>
 #include <mutex>
+#include <memory>
 
 #include "ImageLib/ImageLib.h"
 #include "ImageDatabase.h"
@@ -30,14 +31,16 @@ const double gaussian7x7[49] = { 0.000896861, 0.003587444, 0.006278027, 0.008968
 0.003587444, 0.010762332, 0.023318386, 0.029596413, 0.023318386, 0.010762332, 0.003587444,
 0.000896861, 0.003587444, 0.006278027, 0.00896861, 0.006278027, 0.003587444, 0.000896861 };
 
-const int GAUSSIAN_SIZE = 5;
+const int GAUSSIAN_SIZE = 7;
+
+const int MOPS_DESCRIPTOR_OFFEST = 16;
+const int SIMPLE_DESCRIPTOR_OFFEST = 2;
 
 struct ROCPoint
 {
 	double trueRate;
 	double falseRate;
 };
-
 
 // Compute harris values of an image.
 void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, CFloatImage & orientationImage, std::vector<WorkerThread> & wtp, std::vector<double> & max_per_partition);
@@ -95,6 +98,10 @@ void divideUpWork(std::vector<WorkerThread> & workers, int width, int height, in
 
 void filterImage(CFloatImage &rsltImg, CFloatImage &origImg, int imgWidth, int imgHeight, const double* kernel, int knlWidth, int knlHeight, double scale, double offset);
 
-void computeMOPSDescriptors(CFloatImage & image, FeatureSet & features);
+void computeSimpleDescriptors(CFloatImage &image, FeatureSet &features);
+
+void computeMOPSDescriptors(CFloatImage & image, FeatureSet & features, std::vector<WorkerThread> & wtp);
+
+void resetIndices(std::vector<WorkerThread> & wtp, int height, int width);
 
 #endif
