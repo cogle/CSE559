@@ -101,5 +101,6 @@ void computeSimpleDescriptors(CFloatImage &image, FeatureSet &features);
 void computeMOPSDescriptors(CFloatImage & image, FeatureSet & features, std::vector<WorkerThread> & wtp);
 
 void resetIndices(std::vector<WorkerThread> & wtp, int height, int width);
+void filterImage(CFloatImage &rsltImg, CFloatImage &origImg, int imgWidth, int imgHeight, const double* kernel, int knlWidth, int knlHeight, double scale, double offset);
 
 #endif
