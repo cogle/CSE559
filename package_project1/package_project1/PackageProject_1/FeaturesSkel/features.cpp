@@ -254,40 +254,14 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 	//Single Threaded Compute Harris function
 	computeHarrisValues(grayImage, harrisImage, orientationImage, thread_pool, max_per_partition);
 
-	double sum = 0.0;
-	double stand_dev = 0.0;
-	std::for_each(max_per_partition.begin(), max_per_partition.end(), [&sum](double & ele)
+	double max = 0.0;
+	std::for_each(max_per_partition.begin(), max_per_partition.end(), [&max](double & ele)
 	{
-		sum += ele;
+		if (ele > max){ max = ele; }
 	});
-
-	double avg = sum / (double)max_per_partition.size();
-	std::for_each(max_per_partition.begin(), max_per_partition.end(), [&avg, &stand_dev](double & ele)
-	{
-		stand_dev += pow(ele - avg, 2.0);
-	});
-
-	stand_dev = stand_dev / ((double)max_per_partition.size() - 1.0);
-	stand_dev = sqrt(stand_dev);
-
-	double threshold_avg = avg > 0.01 ? avg : 0.0;
-
-	double threshold;
-	if (2 * stand_dev < threshold_avg)
-	{
-		threshold = threshold_avg - stand_dev * 2;
-	}
-	else
-	{
-		threshold = threshold_avg - stand_dev;
-	}
-
-	std::cout << "Average: " << avg << "\n";
-	std::cout << "Standard Deviation: " << stand_dev << "\n";
-	std::cout << "Threshold: " << threshold << "\n";
 
 	// Threshold the harris image and compute local maxima.  You'll need to implement this function.
-	computeLocalMaxima(harrisImage, harrisMaxImage, thread_pool, threshold);
+	computeLocalMaxima(harrisImage, harrisMaxImage, thread_pool, max*.05);
 
 	// Prints out the harris image for debugging purposes
 	//CByteImage tmp(harrisImage.Shape());
@@ -298,17 +272,26 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 	//Loop through feature points in harrisMaxImage and create feature descriptor 
 	//for each point above a threshold
 
-
+	
 	int id = 0;
 
 	SpinlockMutex spin_lock;
 	std::for_each(thread_pool.begin(), thread_pool.end(), [&](WorkerThread & wt)
 	{
+		int start_x_idx = wt.get_start_x();
+		int start_y_idx = wt.get_start_y();
+
+
+		int end_x_idx = wt.get_end_x();
+		int end_y_idx = wt.get_end_y();
+
+
+
 		wt.assign_work(std::thread([&]()
 		{
-			for (int y = wt.get_start_y(); y < wt.get_end_y(); y++)
+			for (int y = start_y_idx; y < end_y_idx; y++)
 			{
-				for (int x = wt.get_start_x(); x < wt.get_end_x(); x++)
+				for (int x = start_x_idx; x < end_x_idx; x++)
 				{
 					if (harrisMaxImage.Pixel(x, y, 0) == 0){ continue; }
 
@@ -339,7 +322,6 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 		wt.join();
 	});
 	
-
 	//Threading this method proved to be more work than it was worth. 
 	//The overhead from storing shared pointers to elements in the Feature array caused the 
 	//run time to spike, beyond the single threaded version. 
@@ -365,6 +347,7 @@ void ComputeHarrisFeatures(CFloatImage &image, FeatureSet &features)
 // harrisImage:  populate the harris values per pixel in this image
 void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, CFloatImage & orientationImage, std::vector<WorkerThread> & wtp, std::vector<double> & max_per_partition)
 {
+	
 	const int w = srcImage.Shape().width;
 	const int h = srcImage.Shape().height;
 
@@ -376,8 +359,17 @@ void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, CFloat
 	CFloatImage weighted_derivative_yy = CFloatImage(w, h, 1);
 	CFloatImage weighted_derivative_xy = CFloatImage(w, h, 1);
 
-	//Part 1
 
+	CFloatImage gaussian_weight(5, 5, 1);
+	for (int y = 0; y<5; y++)
+	{
+		for (int x = 0; x<5; x++)
+		{
+			gaussian_weight.Pixel(x, y, 0) = gaussian5x5[y * 5 + x];
+		}
+	}
+
+	//Part 1
 	std::for_each(wtp.begin(), wtp.end(), [&](WorkerThread & wt){
 		wt.assign_work(std::thread([&](){
 			ConvolveThreaded(srcImage, derivative_xx, ConvolveKernel_SobelX, wt.get_start_y(), wt.get_end_y());
@@ -388,7 +380,7 @@ void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, CFloat
 	std::for_each(wtp.begin(), wtp.end(), [&](WorkerThread & wt){
 		wt.join();
 	});
-
+	
 	//Part 2
 	std::for_each(wtp.begin(), wtp.end(), [&](WorkerThread & wt){
 		wt.assign_work(std::thread([&](){
@@ -404,70 +396,19 @@ void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, CFloat
 					derivative_yy.Pixel(x, y, 0) = pow(derivative_yy.Pixel(x, y, 0), 2.0);
 				}
 			}
+			ConvolveThreaded(derivative_xy, weighted_derivative_xy, gaussian_weight, wt.get_start_y(), wt.get_end_y());
+			ConvolveThreaded(derivative_xx, weighted_derivative_xx, gaussian_weight, wt.get_start_y(), wt.get_end_y());
+			ConvolveThreaded(derivative_yy, weighted_derivative_yy, gaussian_weight, wt.get_start_y(), wt.get_end_y());
 		}));
 	});
 
 	std::for_each(wtp.begin(), wtp.end(), [&](WorkerThread & wt){
 		wt.join();
 	});
+	
 
-	//Part 3
 	std::for_each(wtp.begin(), wtp.end(), [&](WorkerThread & wt){
 		wt.assign_work(std::thread([&](){
-
-			//Apply Gaussian, this apply's a 7x7 Filter to the model. 
-			//First we need to setup the indicies since they have changed.
-
-			int offset = GAUSSIAN_SIZE / 2;
-			if (wtp.size() > 1)
-			{
-				if (wt.get_start_y() == 0)
-				{
-					wt.set_indicies(wt.get_start_x() + offset, wt.get_start_y() + offset, wt.get_end_x() - offset, wt.get_end_y());
-				}
-				else if (wt.get_end_y() == h)
-				{
-					wt.set_indicies(wt.get_start_x() + offset, wt.get_start_y(), wt.get_end_x() - offset, wt.get_end_y() - offset);
-				}
-				else
-				{
-					wt.set_indicies(wt.get_start_x() + offset, wt.get_start_y(), wt.get_end_x() - offset, wt.get_end_y());
-				}
-			}
-			else
-			{
-				wt.set_indicies(wt.get_start_x() + offset, wt.get_start_y() + offset, wt.get_end_x() - offset, wt.get_end_y() - offset);
-			}
-
-			for (int y = wt.get_start_y(); y < wt.get_end_y(); y++)
-			{
-				for (int x = wt.get_start_x(); x < wt.get_end_x(); x++)
-				{
-
-					weighted_derivative_xy.Pixel(x, y, 0) = 0.0;
-					weighted_derivative_xx.Pixel(x, y, 0) = 0.0;
-					weighted_derivative_yy.Pixel(x, y, 0) = 0.0;
-
-					for (int gy = -offset; gy <= offset; gy++)
-					{
-						for (int gx = -offset; gx <= offset; gx++)
-						{
-							//gy*w+gx
-							int gaussian_index = (gy + offset)*GAUSSIAN_SIZE + (gx + offset);
-
-							int adjusted_x_idx = x + gx;
-							int adjusted_y_idx = y + gy;
-
-							weighted_derivative_xy.Pixel(x, y, 0) += derivative_xy.Pixel(adjusted_x_idx, adjusted_y_idx, 0)*gaussian7x7[gaussian_index];
-							weighted_derivative_xx.Pixel(x, y, 0) += derivative_xx.Pixel(adjusted_x_idx, adjusted_y_idx, 0)*gaussian7x7[gaussian_index];
-							weighted_derivative_yy.Pixel(x, y, 0) += derivative_yy.Pixel(adjusted_x_idx, adjusted_y_idx, 0)*gaussian7x7[gaussian_index];
-
-						}
-					}
-
-				}
-			}
-
 			double a;
 			double b;
 			double d;
@@ -486,8 +427,9 @@ void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, CFloat
 			double max = -1.0;
 
 
-			for (int j = wt.get_start_y(); j < wt.get_end_y(); j++)
+			for (int j = wt.get_start_y() ; j < wt.get_end_y(); j++)
 			{
+				
 				for (int i = wt.get_start_x(); i < wt.get_end_x(); i++)
 				{
 
@@ -512,34 +454,19 @@ void computeHarrisValues(CFloatImage &srcImage, CFloatImage &harrisImage, CFloat
 				}
 			}
 
-
 			max_per_partition[wt.get_worker_id()] = max;
-			
-
-			int cur_offest = SIMPLE_DESCRIPTOR_OFFEST;
-			//int cur_offest = MOPS_DESCRIPTOR_OFFEST;
-
-			if (wt.get_worker_id() == 0)
-			{
-				wt.set_indicies(wt.get_start_x() + cur_offest, wt.get_start_y() + cur_offest, wt.get_end_x() - cur_offest, wt.get_end_y());
-			}
-			else if (wt.get_worker_id() == wtp.size() - 1)
-			{
-				wt.set_indicies(wt.get_start_x() + cur_offest, wt.get_start_y(), wt.get_end_x() - cur_offest, wt.get_end_y() - cur_offest);
-			}
-			else
-			{
-				wt.set_indicies(wt.get_start_x() + cur_offest, wt.get_start_y(), wt.get_end_x() - cur_offest, wt.get_end_y());
-			}
 
 		}));
 	});
-
 
 	std::for_each(wtp.begin(), wtp.end(), [&](WorkerThread & wt){
 		wt.join();
 	});
 
+
+	
+
+	
 }
 
 
@@ -555,6 +482,7 @@ void computeLocalMaxima(CFloatImage &srcImage, CByteImage &destImage, std::vecto
 	{
 		for (int y = wt.get_start_y(); y < wt.get_end_y(); y++)
 		{
+			
 			for (int x = wt.get_start_x(); x < wt.get_end_x(); x++)
 			{
 				double cur_pixel = srcImage.Pixel(x, y, 0);
@@ -566,7 +494,8 @@ void computeLocalMaxima(CFloatImage &srcImage, CByteImage &destImage, std::vecto
 					{
 						for (int search_x = x - 1; search_x <= x + 1; search_x++)
 						{
-							if (search_x == x && search_y == y){ continue; }
+							if (search_x < 0 || search_y < 0){ continue; }
+							if (search_x >= srcImage.Shape().width || search_y >= srcImage.Shape().height){ continue; }
 							else if (srcImage.Pixel(search_x, search_y, 0) > cur_pixel)
 							{
 								destImage.Pixel(x, y, 0) = 0.0;
@@ -993,23 +922,3 @@ void resetIndices(std::vector<WorkerThread> & wtp, int height, int width)
 	wtp[wtp.size() - 1].set_indicies(0, start_index, width, height);
 }
 
-void filterImage(CFloatImage &rsltImg, CFloatImage &origImg, int imgWidth, int imgHeight, const double* kernel, int knlWidth, int knlHeight, double scale, double offset)
-{
-	int xMargin = knlWidth / 2 + 2;
-	int yMargin = knlHeight / 2 + 2;
-	for (int i = xMargin; i < imgWidth - xMargin; i++) {
-		for (int j = yMargin; j < imgHeight - yMargin; j++) {
-			rsltImg.Pixel(i, j, 0) = 0;
-			for (int k = 0; k < knlWidth; k++) {
-				for (int l = 0; l < knlHeight; l++) {
-					int col = k + i - ((knlHeight - 1) / 2);
-					int row = l + j - ((knlWidth - 1) / 2);
-					rsltImg.Pixel(i, j, 0) += kernel[l*knlWidth + k] * origImg.Pixel(i + k, j + l, 0);
-				}
-			}
-			rsltImg.Pixel(i, j, 0) /= scale;
-			rsltImg.Pixel(i, j, 0) += offset;
-		}
-	}
-
-}

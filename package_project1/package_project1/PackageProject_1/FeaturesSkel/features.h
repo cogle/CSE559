@@ -31,7 +31,7 @@ const double gaussian7x7[49] = { 0.000896861, 0.003587444, 0.006278027, 0.008968
 0.003587444, 0.010762332, 0.023318386, 0.029596413, 0.023318386, 0.010762332, 0.003587444,
 0.000896861, 0.003587444, 0.006278027, 0.00896861, 0.006278027, 0.003587444, 0.000896861 };
 
-const int GAUSSIAN_SIZE = 7;
+const int GAUSSIAN_SIZE = 5;
 
 const int MOPS_DESCRIPTOR_OFFEST = 16;
 const int SIMPLE_DESCRIPTOR_OFFEST = 2;
@@ -95,8 +95,6 @@ double computeAUC(vector<ROCPoint> &results);
 
 // Sets up the work to be done by various worker threads.
 void divideUpWork(std::vector<WorkerThread> & workers, int width, int height, int num_threads);
-
-void filterImage(CFloatImage &rsltImg, CFloatImage &origImg, int imgWidth, int imgHeight, const double* kernel, int knlWidth, int knlHeight, double scale, double offset);
 
 void computeSimpleDescriptors(CFloatImage &image, FeatureSet &features);
 
